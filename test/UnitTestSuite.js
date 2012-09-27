@@ -26,6 +26,7 @@
 define(function (require, exports, module) {
     'use strict';
     
+    require("spec/CodeHint-test");
     require("spec/CodeHintUtils-test");
     require("spec/CommandManager-test");
     require("spec/CSSUtils-test");
@@ -45,6 +46,7 @@ define(function (require, exports, module) {
     require("spec/NativeFileSystem-test");
     require("spec/PreferencesManager-test");
     require("spec/ProjectManager-test");
+    require("spec/UpdateNotification-test");
     require("spec/ViewUtils-test");
     require("spec/WorkingSetView-test");
 });
