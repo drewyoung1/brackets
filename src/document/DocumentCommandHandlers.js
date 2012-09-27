@@ -38,13 +38,15 @@ define(function (require, exports, module) {
         ProjectManager      = require("project/ProjectManager"),
         DocumentManager     = require("document/DocumentManager"),
         EditorManager       = require("editor/EditorManager"),
+        FileViewController  = require("project/FileViewController"),
         FileUtils           = require("file/FileUtils"),
         StringUtils         = require("utils/StringUtils"),
         Async               = require("utils/Async"),
         Dialogs             = require("widgets/Dialogs"),
         Strings             = require("strings"),
         PreferencesManager  = require("preferences/PreferencesManager"),
-        PerfUtils           = require("utils/PerfUtils");
+        PerfUtils           = require("utils/PerfUtils"),
+        KeyEvent            = require("utils/KeyEvent");
     
     /**
      * Handlers for commands related to document handling (opening, saving, etc.)
@@ -130,35 +132,34 @@ define(function (require, exports, module) {
      *  document for the specified file path, or rejected if the file can not be read.
      */
     function doOpen(fullPath) {
-        
-        var result = new $.Deferred(), promise = result.promise();
+        var result = new $.Deferred();
+
         if (!fullPath) {
             console.log("doOpen() called without fullPath");
             result.reject();
-            return promise;
-        }
-        
-        PerfUtils.markStart(PerfUtils.OPEN_FILE);
-        result.always(function () {
-            PerfUtils.addMeasurement(PerfUtils.OPEN_FILE);
-        });
-        
-        // Load the file if it was never open before, and then switch to it in the UI
-        DocumentManager.getDocumentForPath(fullPath)
-            .done(function (doc) {
-                DocumentManager.setCurrentDocument(doc);
-                result.resolve(doc);
-            })
-            .fail(function (fileError) {
-                FileUtils.showFileOpenError(fileError.code, fullPath).done(function () {
-                    // For performance, we do lazy checking of file existence, so it may be in working set
-                    DocumentManager.removeFromWorkingSet(new NativeFileSystem.FileEntry(fullPath));
-                    EditorManager.focusEditor();
-                    result.reject();
-                });
+        } else {
+            var perfTimerName = PerfUtils.markStart("Open File:\t" + fullPath);
+            result.always(function () {
+                PerfUtils.addMeasurement(perfTimerName);
             });
+            
+            // Load the file if it was never open before, and then switch to it in the UI
+            DocumentManager.getDocumentForPath(fullPath)
+                .done(function (doc) {
+                    DocumentManager.setCurrentDocument(doc);
+                    result.resolve(doc);
+                })
+                .fail(function (fileError) {
+                    FileUtils.showFileOpenError(fileError.code, fullPath).done(function () {
+                        // For performance, we do lazy checking of file existence, so it may be in working set
+                        DocumentManager.removeFromWorkingSet(new NativeFileSystem.FileEntry(fullPath));
+                        EditorManager.focusEditor();
+                        result.reject();
+                    });
+                });
+        }
 
-        return promise;
+        return result.promise();
     }
     
     /**
@@ -221,6 +222,10 @@ define(function (require, exports, module) {
         return result.promise();
     }
 
+    /**
+     * Opens the given file and makes it the current document. Does NOT add it to the working set.
+     * @param {!{fullPath:string}} Params for FILE_OPEN command
+     */
     function handleFileOpen(commandData) {
         var fullPath = null;
         if (commandData) {
@@ -236,7 +241,8 @@ define(function (require, exports, module) {
      * @param {!{fullPath:string}} Params for FILE_OPEN command
      */
     function handleFileAddToWorkingSet(commandData) {
-        handleFileOpen(commandData).done(function (doc) {
+        return handleFileOpen(commandData).done(function (doc) {
+            // addToWorkingSet is synchronous
             DocumentManager.addToWorkingSet(doc.file);
         });
     }
@@ -314,11 +320,14 @@ define(function (require, exports, module) {
         
         // Create the new node. The createNewItem function does all the heavy work
         // of validating file name, creating the new file and selecting.
-        var deferred = _getUntitledFileSuggestion(baseDir, "Untitled", ".js");
+        var deferred = _getUntitledFileSuggestion(baseDir, Strings.UNTITLED, ".js");
         var createWithSuggestedName = function (suggestedName) {
             ProjectManager.createNewItem(baseDir, suggestedName, false)
                 .pipe(deferred.resolve, deferred.reject, deferred.notify)
-                .always(function () { fileNewInProgress = false; });
+                .always(function () { fileNewInProgress = false; })
+                .done(function (entry) {
+                    FileViewController.addToWorkingSetAndSelect(entry.fullPath, FileViewController.PROJECT_MANAGER);
+                });
         };
 
         deferred.done(createWithSuggestedName);
@@ -432,6 +441,15 @@ define(function (require, exports, module) {
             },
             false
         );
+    }
+    
+    /**
+     * Saves all unsaved documents.
+     * @return {$.Promise} a promise that is resolved once ALL the saves have been completed; or rejected
+     *      after all operations completed if any ONE of them failed.
+     */
+    function handleFileSaveAll() {
+        return saveAll();
     }
     
     /**
@@ -661,10 +679,19 @@ define(function (require, exports, module) {
                 postCloseHandler();
             })
             .fail(function () {
+                _windowGoingAway = false;
                 if (failHandler) {
                     failHandler();
                 }
             });
+    }
+
+    /**
+    * @private
+    * Implementation for abortQuit callback to reset quit sequence settings
+    */
+    function _handleAbortQuit() {
+        _windowGoingAway = false;
     }
     
     /** Confirms any unsaved changes, then closes the window */
@@ -704,7 +731,7 @@ define(function (require, exports, module) {
     /** Does a full reload of the browser window */
     function handleFileReload(commandData) {
         return _handleWindowGoingAway(commandData, function () {
-            window.location.reload();
+            window.location.reload(true);
         });
     }
     
@@ -720,7 +747,7 @@ define(function (require, exports, module) {
      * @param {jQueryEvent} event Key-up event
      */
     function detectDocumentNavEnd(event) {
-        if (event.keyCode === 17) {  // Ctrl key
+        if (event.keyCode === KeyEvent.DOM_VK_CONTROL) {  // Ctrl key
             DocumentManager.finalizeDocumentNavigation();
             
             _addedNavKeyHandler = false;
@@ -765,6 +792,7 @@ define(function (require, exports, module) {
         // be called from a "+" button in the project
         CommandManager.register(Strings.CMD_FILE_NEW,           Commands.FILE_NEW, handleFileNewInProject);
         CommandManager.register(Strings.CMD_FILE_SAVE,          Commands.FILE_SAVE, handleFileSave);
+        CommandManager.register(Strings.CMD_FILE_SAVE_ALL,      Commands.FILE_SAVE_ALL, handleFileSaveAll);
 
         CommandManager.register(Strings.CMD_FILE_CLOSE,         Commands.FILE_CLOSE, handleFileClose);
         CommandManager.register(Strings.CMD_FILE_CLOSE_ALL,     Commands.FILE_CLOSE_ALL, handleFileCloseAll);
@@ -773,11 +801,7 @@ define(function (require, exports, module) {
         CommandManager.register(Strings.CMD_REFRESH_WINDOW,     Commands.DEBUG_REFRESH_WINDOW, handleFileReload);
         CommandManager.register(Strings.CMD_NEXT_DOC,           Commands.NAVIGATE_NEXT_DOC, handleGoNextDoc);
         CommandManager.register(Strings.CMD_PREV_DOC,           Commands.NAVIGATE_PREV_DOC, handleGoPrevDoc);
-
-        KeyBindingManager.addBinding(Commands.NAVIGATE_NEXT_DOC, [{key: "Ctrl-Tab",   platform: "win"},
-                                                                    {key: "Ctrl-Tab",  platform:  "mac"}]);
-        KeyBindingManager.addBinding(Commands.NAVIGATE_PREV_DOC, [{key: "Ctrl-Shift-Tab",   platform: "win"},
-                                                                    {key: "Ctrl-Shift-Tab",  platform:  "mac"}]);
+        CommandManager.register(Strings.CMD_ABORT_QUIT,         Commands.APP_ABORT_QUIT, _handleAbortQuit);
         
         // Listen for changes that require updating the editor titlebar
         $(DocumentManager).on("dirtyFlagChange", handleDirtyChange);

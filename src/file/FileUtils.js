@@ -30,6 +30,8 @@
  */
 define(function (require, exports, module) {
     "use strict";
+
+    require("utils/Global");
     
     var NativeFileSystem    = require("file/NativeFileSystem").NativeFileSystem,
         PerfUtils           = require("utils/PerfUtils"),
@@ -200,6 +202,19 @@ define(function (require, exports, module) {
         
         return path;
     }
+    
+    /**
+     * Canonicalizes a folder path to not include a trailing slash.
+     * @param {string} path
+     * @return {string}
+     */
+    function canonicalizeFolderPath(path) {
+        if (path.length > 0 && path[path.length - 1] === "/") {
+            return path.slice(0, -1);
+        } else {
+            return path;
+        }
+    }
 
     /**
      * Returns a native absolute path to the 'brackets' source directory.
@@ -260,4 +275,5 @@ define(function (require, exports, module) {
     exports.convertToNativePath            = convertToNativePath;
     exports.getNativeBracketsDirectoryPath = getNativeBracketsDirectoryPath;
     exports.getNativeModuleDirectoryPath   = getNativeModuleDirectoryPath;
+    exports.canonicalizeFolderPath         = canonicalizeFolderPath;
 });

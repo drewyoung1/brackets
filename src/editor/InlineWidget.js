@@ -29,18 +29,28 @@ define(function (require, exports, module) {
     "use strict";
 
     // Load dependent modules
-    var EditorManager       = require("editor/EditorManager");
+    var EditorManager       = require("editor/EditorManager"),
+        KeyEvent            = require("utils/KeyEvent");
     
     /**
      * @constructor
      *
      */
     function InlineWidget() {
+        var self = this;
+        
         // create the outer wrapper div
         this.htmlContent = window.document.createElement("div");
         this.$htmlContent = $(this.htmlContent).addClass("inline-widget");
         this.$htmlContent.append("<div class='shadow top' />")
             .append("<div class='shadow bottom' />");
+        
+        this.$htmlContent.on("keydown", function (e) {
+            if (e.keyCode === KeyEvent.DOM_VK_ESCAPE) {
+                self.close();
+                e.stopImmediatePropagation();
+            }
+        });
     }
     InlineWidget.prototype.htmlContent = null;
     InlineWidget.prototype.$htmlContent = null;

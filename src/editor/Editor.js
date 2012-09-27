@@ -61,16 +61,20 @@
 define(function (require, exports, module) {
     "use strict";
     
-    var EditorManager   = require("editor/EditorManager"),
-        Commands        = require("command/Commands"),
-        CommandManager  = require("command/CommandManager"),
-        Menus           = require("command/Menus"),
-        PerfUtils       = require("utils/PerfUtils"),
-        Strings         = require("strings"),
-        TextRange       = require("document/TextRange").TextRange,
-        ViewUtils       = require("utils/ViewUtils");
+    var EditorManager      = require("editor/EditorManager"),
+        CodeHintManager    = require("editor/CodeHintManager"),
+        Commands           = require("command/Commands"),
+        CommandManager     = require("command/CommandManager"),
+        Menus              = require("command/Menus"),
+        PerfUtils          = require("utils/PerfUtils"),
+        PreferencesManager = require("preferences/PreferencesManager"),
+        Strings            = require("strings"),
+        TextRange          = require("document/TextRange").TextRange,
+        ViewUtils          = require("utils/ViewUtils");
     
-
+    var PREFERENCES_CLIENT_ID = "com.adobe.brackets.Editor",
+        defaultPrefs = { useTabChar: false };
+    
     /**
      * @private
      * Handle Tab key press.
@@ -210,6 +214,13 @@ define(function (require, exports, module) {
         }
     }
 
+    function _handleKeyEvents(jqEvent, editor, event) {
+        _checkElectricChars(jqEvent, editor, event);
+
+        // Pass the key event to the code hint manager. It may call preventDefault() on the event.
+        CodeHintManager.handleKeyEvent(editor, event);
+    }
+
     function _handleSelectAll() {
         var editor = EditorManager.getFocusedEditor();
         if (editor) {
@@ -217,44 +228,8 @@ define(function (require, exports, module) {
         }
     }
     
-    /** Launches CodeMirror's basic Find-within-single-editor feature */
-    function _launchFind() {
-        var editor = EditorManager.getFocusedEditor();
-        if (editor) {
-            var codeMirror = editor._codeMirror;
-
-            // Bring up CodeMirror's existing search bar UI
-            codeMirror.execCommand("find");
-
-            // Prepopulate the search field with the current selection, if any
-            $(".CodeMirror-dialog input[type='text']")
-                .attr("value", codeMirror.getSelection())
-                .get(0).select();
-        }
-    }
-
-    function _findNext() {
-        var editor = EditorManager.getFocusedEditor();
-        if (editor) {
-            editor._codeMirror.execCommand("findNext");
-        }
-    }
-
-    function _findPrevious() {
-        var editor = EditorManager.getFocusedEditor();
-        if (editor) {
-            editor._codeMirror.execCommand("findPrev");
-        }
-    }
-
-    function _replace() {
-        var editor = EditorManager.getFocusedEditor();
-        if (editor) {
-            editor._codeMirror.execCommand("replace");
-        }
-    }
-    
-    
+    /** Editor preferences */
+    var _prefs = PreferencesManager.getPreferenceStorage(PREFERENCES_CLIENT_ID, defaultPrefs);
     
     /**
      * List of all current (non-destroy()ed) Editor instances. Needed when changing global preferences
@@ -264,7 +239,7 @@ define(function (require, exports, module) {
     var _instances = [];
     
     /** @type {boolean}  Global setting: When inserting new text, use tab characters? (instead of spaces) */
-    var _useTabChar = false;
+    var _useTabChar = _prefs.getValue("useTabChar");
     
     
     
@@ -338,6 +313,9 @@ define(function (require, exports, module) {
                     CodeMirror.commands.delCharRight(instance);
                 }
             },
+            "Esc": function (instance) {
+                self.removeAllInlineWidgets();
+            },
             "Shift-Delete": "cut",
             "Ctrl-Insert": "copy",
             "Shift-Insert": "paste"
@@ -367,7 +345,7 @@ define(function (require, exports, module) {
         this._installEditorListeners();
         
         $(this)
-            .on("keyEvent", _checkElectricChars)
+            .on("keyEvent", _handleKeyEvents)
             .on("change", this._handleEditorChange.bind(this));
         
         // Set code-coloring mode BEFORE populating with text, to avoid a flash of uncolored text
@@ -403,7 +381,7 @@ define(function (require, exports, module) {
         // Add scrollTop property to this object for the scroll shadow code to use
         Object.defineProperty(this, "scrollTop", {
             get: function () {
-                return this._codeMirror.scrollPos().y;
+                return this._codeMirror.getScrollInfo().y;
             }
         });
     }
@@ -543,6 +521,8 @@ define(function (require, exports, module) {
                 throw new Error("ERROR: Typing in Editor should not destroy its own _visibleRange");
             }
         }
+        
+        CodeHintManager.handleChange(this);
     };
     
     /**
@@ -599,14 +579,18 @@ define(function (require, exports, module) {
         });
         this._codeMirror.setOption("onKeyEvent", function (instance, event) {
             $(self).triggerHandler("keyEvent", [self, event]);
-            return false;   // false tells CodeMirror we didn't eat the event
+            return event.defaultPrevented;   // false tells CodeMirror we didn't eat the event
         });
         this._codeMirror.setOption("onCursorActivity", function (instance) {
             $(self).triggerHandler("cursorActivity", [self]);
         });
         this._codeMirror.setOption("onScroll", function (instance) {
-            // close all dropdowns on scroll
-            Menus.closeAll();
+            // If this editor is visible, close all dropdowns on scroll.
+            // (We don't want to do this if we're just scrolling in a non-visible editor
+            // in response to some document change event.)
+            if (self.isFullyVisible()) {
+                Menus.closeAll();
+            }
 
             $(self).triggerHandler("scroll", [self]);
         
@@ -803,16 +787,16 @@ define(function (require, exports, module) {
     
     /**
      * Returns the current scroll position of the editor.
-     * @returns {{x:number, y:number}} The x,y scroll position.
+     * @returns {{x:number, y:number}} The x,y scroll position in pixels
      */
     Editor.prototype.getScrollPos = function () {
-        return this._codeMirror.scrollPos();
+        return this._codeMirror.getScrollInfo();
     };
     
     /**
      * Sets the current scroll position of the editor.
-     * @param {number} x scrollLeft position
-     * @param {number} y scrollTop position
+     * @param {number} x scrollLeft position in pixels
+     * @param {number} y scrollTop position in pixels
      */
     Editor.prototype.setScrollPos = function (x, y) {
         this._codeMirror.scrollTo(x, y);
@@ -835,6 +819,18 @@ define(function (require, exports, module) {
         
         // once this widget is added, notify all following inline widgets of a position change
         this._fireWidgetOffsetTopChanged(pos.line);
+    };
+    
+    /**
+     * Removes all inline widgets
+     */
+    Editor.prototype.removeAllInlineWidgets = function () {
+        // copy the array because _removeInlineWidgetInternal will modifying the original
+        var widgets = [].concat(this.getInlineWidgets());
+        
+        widgets.forEach(function (widget) {
+            this.removeInlineWidget(widget);
+        }, this);
     };
     
     /**
@@ -1061,6 +1057,9 @@ define(function (require, exports, module) {
         _instances.forEach(function (editor) {
             editor._codeMirror.setOption("indentWithTabs", _useTabChar);
         });
+        
+        // Remember the setting across launches
+        _prefs.setValue("useTabChar", Boolean(_useTabChar));
     };
     
     /** @type {boolean}  Gets whether all Editors use tab characters (vs. spaces) when inserting new text */
@@ -1070,10 +1069,6 @@ define(function (require, exports, module) {
 
     
     // Global commands that affect the currently focused Editor instance, wherever it may be
-    CommandManager.register(Strings.CMD_FIND,           Commands.EDIT_FIND, _launchFind);
-    CommandManager.register(Strings.CMD_FIND_NEXT,      Commands.EDIT_FIND_NEXT, _findNext);
-    CommandManager.register(Strings.CMD_REPLACE,        Commands.EDIT_REPLACE, _replace);
-    CommandManager.register(Strings.CMD_FIND_PREVIOUS,  Commands.EDIT_FIND_PREVIOUS, _findPrevious);
     CommandManager.register(Strings.CMD_SELECT_ALL,     Commands.EDIT_SELECT_ALL, _handleSelectAll);
 
     // Define public API

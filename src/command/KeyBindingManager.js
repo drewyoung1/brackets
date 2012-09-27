@@ -31,15 +31,21 @@
 define(function (require, exports, module) {
     "use strict";
 
-    var CommandManager = require("command/CommandManager");
+    require("utils/Global");
+
+    var CommandManager = require("command/CommandManager"),
+        KeyEvent       = require("utils/KeyEvent"),
+        Strings        = require("strings");
 
     /**
-     * @type {Object.<string, {{commandID: string, key: string, displayKey: string}}}
+     * Maps normalized shortcut descriptor to key binding info.
+     * @type {!Object.<string, {commandID: string, key: string, displayKey: string}>}
      */
     var _keyMap = {};
 
     /**
-     * @type {Object.<string, Array.<{{key: string, displayKey: string}}>}
+     * Maps commandID to the list of shortcuts that are bound to it.
+     * @type {!Object.<string, Array.<{key: string, displayKey: string}>>}
      */
     var _commandMap = {};
 
@@ -98,18 +104,6 @@ define(function (require, exports, module) {
         return keyDescriptor.join("-");
     }
     
-    function _isModifier(left, right, previouslyFound, origDescriptor) {
-        if (!left || !right) {
-            return false;
-        }
-        left = left.trim().toLowerCase();
-        right = right.trim().toLowerCase();
-        var matched = (left.length > 0 && left === right);
-        if (matched && previouslyFound) {
-            console.log("KeyBindingManager normalizeKeyDescriptorString() - Modifier defined twice: " + origDescriptor);
-        }
-        return matched;
-    }
     
     /**
      * normalizes the incoming key descriptor so the modifier keys are always specified in the correct order
@@ -123,22 +117,35 @@ define(function (require, exports, module) {
             hasShift = false,
             key = "",
             error = false;
+
+        function _compareModifierString(left, right, previouslyFound, origDescriptor) {
+            if (!left || !right) {
+                return false;
+            }
+            left = left.trim().toLowerCase();
+            right = right.trim().toLowerCase();
+            var matched = (left.length > 0 && left === right);
+            if (matched && previouslyFound) {
+                console.log("KeyBindingManager normalizeKeyDescriptorString() - Modifier defined twice: " + origDescriptor);
+            }
+            return matched;
+        }
         
         origDescriptor.split("-").forEach(function parseDescriptor(ele, i, arr) {
-            if (_isModifier("ctrl", ele, hasCtrl)) {
+            if (_compareModifierString("ctrl", ele, hasCtrl)) {
                 if (brackets.platform === "mac") {
                     hasMacCtrl = true;
                 } else {
                     hasCtrl = true;
                 }
-            } else if (_isModifier("cmd", ele, hasCtrl, origDescriptor)) {
+            } else if (_compareModifierString("cmd", ele, hasCtrl, origDescriptor)) {
                 hasCtrl = true;
-            } else if (_isModifier("alt", ele, hasAlt, origDescriptor)) {
+            } else if (_compareModifierString("alt", ele, hasAlt, origDescriptor)) {
                 hasAlt = true;
-            } else if (_isModifier("opt", ele, hasAlt, origDescriptor)) {
+            } else if (_compareModifierString("opt", ele, hasAlt, origDescriptor)) {
                 console.log("KeyBindingManager normalizeKeyDescriptorString() - Opt getting mapped to Alt from: " + origDescriptor);
                 hasAlt = true;
-            } else if (_isModifier("shift", ele, hasShift, origDescriptor)) {
+            } else if (_compareModifierString("shift", ele, hasShift, origDescriptor)) {
                 hasShift = true;
             } else if (key.length > 0) {
                 console.log("KeyBindingManager normalizeKeyDescriptorString() - Multiple keys defined. Using key: " + key + " from: " + origDescriptor);
@@ -176,27 +183,27 @@ define(function (require, exports, module) {
      **/
     function _mapKeycodeToKey(keycode, key) {
         switch (keycode) {
-        case 186:
+        case KeyEvent.DOM_VK_SEMICOLON:
             return ";";
-        case 187:
+        case KeyEvent.DOM_VK_EQUALS:
             return "=";
-        case 188:
+        case KeyEvent.DOM_VK_COMMA:
             return ",";
-        case 189:
+        case KeyEvent.DOM_VK_DASH:
             return "-";
-        case 190:
+        case KeyEvent.DOM_VK_PERIOD:
             return ".";
-        case 191:
+        case KeyEvent.DOM_VK_SLASH:
             return "/";
-        case 192:
+        case KeyEvent.DOM_VK_BACK_QUOTE:
             return "`";
-        case 219:
+        case KeyEvent.DOM_VK_OPEN_BRACKET:
             return "[";
-        case 220:
+        case KeyEvent.DOM_VK_BACK_SLASH:
             return "\\";
-        case 221:
+        case KeyEvent.DOM_VK_CLOSE_BRACKET:
             return "]";
-        case 222:
+        case KeyEvent.DOM_VK_QUOTE:
             return "'";
         default:
             return key;
@@ -229,8 +236,13 @@ define(function (require, exports, module) {
         }
         
         // Translate some keys to their common names
-        if (key === "\t") { key = "Tab"; }
-        key = _mapKeycodeToKey(event.keyCode, key);
+        if (key === "\t") {
+            key = "Tab";
+        } else if (key === " ") {
+            key = "Space";
+        } else {
+            key = _mapKeycodeToKey(event.keyCode, key);
+        }
 
         return _buildKeyDescriptor(hasMacCtrl, hasCtrl, hasAlt, hasShift, key);
     }
@@ -250,7 +262,10 @@ define(function (require, exports, module) {
             displayStr = displayStr.replace("Shift", "\u21E7"); // Shift > shift symbol
             displayStr = displayStr.replace("Alt", "\u2325");   // Alt > option symbol
         } else {
-            displayStr = descriptor.replace(/-/g, "+");
+            displayStr = descriptor.replace("Ctrl", Strings.KEYBOARD_CTRL);   // Ctrl
+            displayStr = displayStr.replace("Shift", Strings.KEYBOARD_SHIFT); // Shift > shift symbol
+            displayStr = displayStr.replace("Space", Strings.KEYBOARD_SPACE); // Alt > option symbol
+            displayStr = displayStr.replace(/-/g, "+");
         }
 
         return displayStr;
@@ -335,7 +350,7 @@ define(function (require, exports, module) {
 
     /**
      * Returns a copy of the keymap
-     * @returns {!{commandID:string, displayKey:string}}
+     * @returns {!Object.<string, {commandID: string, key: string, displayKey: string}>}
      */
     function getKeymap() {
         return $.extend({}, _keyMap);
